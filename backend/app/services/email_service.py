@@ -127,7 +127,7 @@ def _build_plain_text(summary: str) -> str:
 
 
 def _send_smtp(to_email: str, html_body: str, text_body: str) -> None:
-    """Blocking SMTP send — called via asyncio.to_thread."""
+    """Blocking SMTP send — tries SSL (465) first, then STARTTLS (587)."""
     if not all([SMTP_HOST, SMTP_USER, SMTP_PASSWORD]):
         raise HTTPException(status_code=500, detail="SMTP is not configured. Set SMTP_HOST, SMTP_USER, and SMTP_PASSWORD.")
 
@@ -139,10 +139,24 @@ def _send_smtp(to_email: str, html_body: str, text_body: str) -> None:
     msg.attach(MIMEText(text_body, "plain"))
     msg.attach(MIMEText(html_body, "html"))
 
+    # Try SSL on port 465 first (works on hosts that block port 587)
+    try:
+        print("[EMAIL] Trying SMTP SSL on port 465...", flush=True)
+        with smtplib.SMTP_SSL(SMTP_HOST, 465, timeout=15) as server:
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.sendmail(SMTP_FROM_EMAIL, to_email, msg.as_string())
+        print("[EMAIL] SMTP SSL sent successfully.", flush=True)
+        return
+    except Exception as e:
+        print(f"[EMAIL] SMTP SSL failed: {e}", flush=True)
+
+    # Fallback to STARTTLS on configured port
+    print(f"[EMAIL] Trying SMTP STARTTLS on port {SMTP_PORT}...", flush=True)
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as server:
         server.starttls()
         server.login(SMTP_USER, SMTP_PASSWORD)
         server.sendmail(SMTP_FROM_EMAIL, to_email, msg.as_string())
+    print("[EMAIL] SMTP STARTTLS sent successfully.", flush=True)
 
 
 async def _send_resend(to_email: str, html_body: str) -> None:
@@ -169,17 +183,30 @@ async def _send_resend(to_email: str, html_body: str) -> None:
 
 
 async def send_email(to_email: str, summary: str) -> None:
-    """Send the executive summary via Resend (if configured) or SMTP fallback."""
+    """Send the executive summary via SMTP first, Resend HTTP as fallback."""
     html_body = _build_html(summary)
     text_body = _build_plain_text(summary)
 
-    try:
-        if RESEND_API_KEY:
-            await _send_resend(to_email, html_body)
-        else:
+    # Try SMTP first (can send to any email)
+    if all([SMTP_HOST, SMTP_USER, SMTP_PASSWORD]):
+        try:
             await asyncio.to_thread(_send_smtp, to_email, html_body, text_body)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        print(f"[EMAIL] Failed to send: {exc}", flush=True)
-        raise HTTPException(status_code=502, detail=f"Failed to send email: {exc}")
+            return
+        except Exception as smtp_err:
+            print(f"[EMAIL] SMTP failed completely: {smtp_err}", flush=True)
+            # Fall through to Resend
+            if not RESEND_API_KEY:
+                raise HTTPException(status_code=502, detail=f"Failed to send email via SMTP: {smtp_err}")
+
+    # Fallback to Resend HTTP API
+    if RESEND_API_KEY:
+        try:
+            await _send_resend(to_email, html_body)
+            return
+        except HTTPException:
+            raise
+        except Exception as exc:
+            print(f"[EMAIL] Resend failed: {exc}", flush=True)
+            raise HTTPException(status_code=502, detail=f"Failed to send email: {exc}")
+
+    raise HTTPException(status_code=500, detail="No email provider configured.")

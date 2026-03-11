@@ -82,20 +82,48 @@ async def test_groq():
         return {"ok": False, "error": str(e)}
 
 
-@app.get("/test-smtp", tags=["System"], summary="Test SMTP connection")
-async def test_smtp():
-    """Quick test of SMTP connectivity."""
+@app.get("/test-email", tags=["System"], summary="Test email connectivity")
+async def test_email():
+    """Quick test of email connectivity (SMTP SSL 465, SMTP STARTTLS 587, then Resend)."""
     import smtplib
-    from app.config import SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD
-    print("[TEST-SMTP] Starting...", flush=True)
-    if not all([SMTP_HOST, SMTP_USER, SMTP_PASSWORD]):
-        return {"ok": False, "error": "SMTP config missing"}
-    try:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as server:
-            server.starttls()
-            server.login(SMTP_USER, SMTP_PASSWORD)
-        print("[TEST-SMTP] Login OK", flush=True)
-        return {"ok": True, "message": "SMTP login successful"}
-    except Exception as e:
-        print(f"[TEST-SMTP] Error: {e}", flush=True)
-        return {"ok": False, "error": str(e)}
+    from app.config import RESEND_API_KEY, SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD
+    results = {}
+
+    # Test SMTP SSL on port 465
+    if all([SMTP_HOST, SMTP_USER, SMTP_PASSWORD]):
+        try:
+            print("[TEST-EMAIL] Trying SMTP SSL port 465...", flush=True)
+            with smtplib.SMTP_SSL(SMTP_HOST, 465, timeout=15) as server:
+                server.login(SMTP_USER, SMTP_PASSWORD)
+            results["smtp_ssl_465"] = {"ok": True, "message": "SMTP SSL login successful"}
+        except Exception as e:
+            print(f"[TEST-EMAIL] SMTP SSL 465 failed: {e}", flush=True)
+            results["smtp_ssl_465"] = {"ok": False, "error": str(e)}
+
+        # Test SMTP STARTTLS on configured port
+        try:
+            print(f"[TEST-EMAIL] Trying SMTP STARTTLS port {SMTP_PORT}...", flush=True)
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as server:
+                server.starttls()
+                server.login(SMTP_USER, SMTP_PASSWORD)
+            results["smtp_starttls"] = {"ok": True, "message": "SMTP STARTTLS login successful"}
+        except Exception as e:
+            print(f"[TEST-EMAIL] SMTP STARTTLS failed: {e}", flush=True)
+            results["smtp_starttls"] = {"ok": False, "error": str(e)}
+
+    # Test Resend
+    if RESEND_API_KEY:
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                r = await client.get(
+                    "https://api.resend.com/domains",
+                    headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
+                )
+            results["resend"] = {"ok": r.status_code == 200, "status": r.status_code}
+        except Exception as e:
+            results["resend"] = {"ok": False, "error": str(e)}
+
+    if not results:
+        return {"ok": False, "error": "No email provider configured"}
+    return results
