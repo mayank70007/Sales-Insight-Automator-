@@ -41,3 +41,18 @@ app.include_router(analyze_router)
 async def health_check():
     """Returns service health status. Used by Docker healthcheck and monitoring."""
     return {"status": "healthy"}
+
+
+@app.get("/config-check", tags=["System"], summary="Verify environment config")
+async def config_check():
+    """Check which required environment variables are set (values are not revealed)."""
+    from app.config import GROQ_API_KEY, SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM_EMAIL, ALLOWED_ORIGINS
+    return {
+        "GROQ_API_KEY": bool(GROQ_API_KEY),
+        "SMTP_HOST": bool(SMTP_HOST),
+        "SMTP_PORT": SMTP_PORT,
+        "SMTP_USER": bool(SMTP_USER),
+        "SMTP_PASSWORD": bool(SMTP_PASSWORD),
+        "SMTP_FROM_EMAIL": bool(SMTP_FROM_EMAIL),
+        "ALLOWED_ORIGINS": ALLOWED_ORIGINS,
+    }

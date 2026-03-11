@@ -1,3 +1,6 @@
+import logging
+import traceback
+
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from pydantic import EmailStr, ValidationError
 from pydantic import BaseModel as _BaseModel
@@ -7,6 +10,8 @@ from app.services.data_processor import extract_metrics, parse_dataframe
 from app.services.email_service import send_email
 from app.utils.rate_limiter import limiter
 from app.utils.validators import validate_file
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Analysis"])
 
@@ -46,28 +51,41 @@ async def analyze(
     except ValidationError:
         raise HTTPException(status_code=422, detail="Invalid email address.")
 
-    # --- Validate & read file ---
-    file_bytes = await validate_file(file)
+    try:
+        # --- Validate & read file ---
+        logger.info("Validating file...")
+        file_bytes = await validate_file(file)
 
-    # --- Process data ---
-    df = parse_dataframe(file_bytes, file.filename or "data.csv")
-    metrics = extract_metrics(df)
+        # --- Process data ---
+        logger.info("Parsing dataframe...")
+        df = parse_dataframe(file_bytes, file.filename or "data.csv")
+        logger.info("Extracting metrics...")
+        metrics = extract_metrics(df)
 
-    # --- Generate AI summary ---
-    summary = await generate_summary(metrics)
+        # --- Generate AI summary ---
+        logger.info("Calling Groq API...")
+        summary = await generate_summary(metrics)
+        logger.info("Groq API returned successfully.")
 
-    # --- Send email ---
-    await send_email(email, summary)
+        # --- Send email ---
+        logger.info("Sending email to %s...", email)
+        await send_email(email, summary)
+        logger.info("Email sent successfully.")
 
-    return {
-        "success": True,
-        "summary": summary,
-        "metrics": {
-            "total_revenue": metrics.total_revenue,
-            "top_region": metrics.top_region,
-            "top_category": metrics.top_category,
-            "total_units_sold": metrics.total_units_sold,
-            "cancelled_orders": metrics.cancelled_orders,
-            "cancellation_rate": metrics.cancellation_rate,
-        },
-    }
+        return {
+            "success": True,
+            "summary": summary,
+            "metrics": {
+                "total_revenue": metrics.total_revenue,
+                "top_region": metrics.top_region,
+                "top_category": metrics.top_category,
+                "total_units_sold": metrics.total_units_sold,
+                "cancelled_orders": metrics.cancelled_orders,
+                "cancellation_rate": metrics.cancellation_rate,
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Unhandled error in /analyze: %s\n%s", exc, traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Internal error: {exc}")
