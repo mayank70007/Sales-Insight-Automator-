@@ -147,4 +147,5 @@ async def send_email(to_email: str, summary: str) -> None:
     except HTTPException:
         raise
     except Exception as exc:
+        print(f"[EMAIL] Failed to send: {exc}", flush=True)
         raise HTTPException(status_code=502, detail=f"Failed to send email: {exc}")

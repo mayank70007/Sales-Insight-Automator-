@@ -53,24 +53,24 @@ async def analyze(
 
     try:
         # --- Validate & read file ---
-        logger.info("Validating file...")
+        print("[ANALYZE] Validating file...", flush=True)
         file_bytes = await validate_file(file)
 
         # --- Process data ---
-        logger.info("Parsing dataframe...")
+        print("[ANALYZE] Parsing dataframe...", flush=True)
         df = parse_dataframe(file_bytes, file.filename or "data.csv")
-        logger.info("Extracting metrics...")
+        print("[ANALYZE] Extracting metrics...", flush=True)
         metrics = extract_metrics(df)
 
         # --- Generate AI summary ---
-        logger.info("Calling Groq API...")
+        print("[ANALYZE] Calling Groq API...", flush=True)
         summary = await generate_summary(metrics)
-        logger.info("Groq API returned successfully.")
+        print("[ANALYZE] Groq API returned successfully.", flush=True)
 
         # --- Send email ---
-        logger.info("Sending email to %s...", email)
+        print(f"[ANALYZE] Sending email to {email}...", flush=True)
         await send_email(email, summary)
-        logger.info("Email sent successfully.")
+        print("[ANALYZE] Email sent successfully.", flush=True)
 
         return {
             "success": True,
@@ -84,8 +84,9 @@ async def analyze(
                 "cancellation_rate": metrics.cancellation_rate,
             },
         }
-    except HTTPException:
+    except HTTPException as he:
+        print(f"[ANALYZE] HTTPException {he.status_code}: {he.detail}", flush=True)
         raise
     except Exception as exc:
-        logger.error("Unhandled error in /analyze: %s\n%s", exc, traceback.format_exc())
+        print(f"[ANALYZE] Unhandled error: {exc}\n{traceback.format_exc()}", flush=True)
         raise HTTPException(status_code=500, detail=f"Internal error: {exc}")

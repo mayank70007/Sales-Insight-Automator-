@@ -49,6 +49,7 @@ async def generate_summary(metrics: SalesMetrics) -> str:
         )
 
     if response.status_code != 200:
+        print(f"[GROQ] API error {response.status_code}: {response.text}", flush=True)
         raise HTTPException(
             status_code=502,
             detail=f"Groq API error ({response.status_code}): {response.text}",
