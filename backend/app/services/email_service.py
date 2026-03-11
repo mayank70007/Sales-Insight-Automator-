@@ -8,6 +8,7 @@ import httpx
 from fastapi import HTTPException
 
 from app.config import (
+    BREVO_API_KEY,
     RESEND_API_KEY,
     SMTP_FROM_EMAIL,
     SMTP_HOST,
@@ -129,38 +130,54 @@ def _build_plain_text(summary: str) -> str:
 def _send_smtp(to_email: str, html_body: str, text_body: str) -> None:
     """Blocking SMTP send — tries SSL (465) first, then STARTTLS (587)."""
     if not all([SMTP_HOST, SMTP_USER, SMTP_PASSWORD]):
-        raise HTTPException(status_code=500, detail="SMTP is not configured. Set SMTP_HOST, SMTP_USER, and SMTP_PASSWORD.")
+        raise HTTPException(status_code=500, detail="SMTP is not configured.")
 
     msg = MIMEMultipart("alternative")
     msg["From"] = SMTP_FROM_EMAIL
     msg["To"] = to_email
     msg["Subject"] = "Sales Insight Report - Executive Summary"
-
     msg.attach(MIMEText(text_body, "plain"))
     msg.attach(MIMEText(html_body, "html"))
 
-    # Try SSL on port 465 first (works on hosts that block port 587)
     try:
-        print("[EMAIL] Trying SMTP SSL on port 465...", flush=True)
         with smtplib.SMTP_SSL(SMTP_HOST, 465, timeout=15) as server:
             server.login(SMTP_USER, SMTP_PASSWORD)
             server.sendmail(SMTP_FROM_EMAIL, to_email, msg.as_string())
-        print("[EMAIL] SMTP SSL sent successfully.", flush=True)
         return
-    except Exception as e:
-        print(f"[EMAIL] SMTP SSL failed: {e}", flush=True)
+    except Exception:
+        pass
 
-    # Fallback to STARTTLS on configured port
-    print(f"[EMAIL] Trying SMTP STARTTLS on port {SMTP_PORT}...", flush=True)
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as server:
         server.starttls()
         server.login(SMTP_USER, SMTP_PASSWORD)
         server.sendmail(SMTP_FROM_EMAIL, to_email, msg.as_string())
-    print("[EMAIL] SMTP STARTTLS sent successfully.", flush=True)
+
+
+async def _send_brevo(to_email: str, html_body: str) -> None:
+    """Send email via Brevo (Sendinblue) HTTP API — free 300/day, any recipient."""
+    print("[EMAIL] Using Brevo HTTP API...", flush=True)
+    async with httpx.AsyncClient(timeout=20) as client:
+        response = await client.post(
+            "https://api.brevo.com/v3/smtp/email",
+            headers={
+                "api-key": BREVO_API_KEY,
+                "Content-Type": "application/json",
+            },
+            json={
+                "sender": {"name": "Sales Insight Automator", "email": SMTP_FROM_EMAIL or "singalmayank0000@gmail.com"},
+                "to": [{"email": to_email}],
+                "subject": "Sales Insight Report - Executive Summary",
+                "htmlContent": html_body,
+            },
+        )
+    if response.status_code not in (200, 201):
+        print(f"[EMAIL] Brevo error {response.status_code}: {response.text}", flush=True)
+        raise HTTPException(status_code=502, detail=f"Brevo API error ({response.status_code}): {response.text}")
+    print("[EMAIL] Brevo sent successfully.", flush=True)
 
 
 async def _send_resend(to_email: str, html_body: str) -> None:
-    """Send email via Resend HTTP API (works on Render free tier)."""
+    """Send email via Resend HTTP API."""
     print("[EMAIL] Using Resend HTTP API...", flush=True)
     async with httpx.AsyncClient(timeout=15) as client:
         response = await client.post(
@@ -183,30 +200,35 @@ async def _send_resend(to_email: str, html_body: str) -> None:
 
 
 async def send_email(to_email: str, summary: str) -> None:
-    """Send the executive summary via SMTP first, Resend HTTP as fallback."""
+    """Send email: Brevo first, then Resend, then SMTP fallback."""
     html_body = _build_html(summary)
     text_body = _build_plain_text(summary)
+    errors = []
 
-    # Try SMTP first (can send to any email)
-    if all([SMTP_HOST, SMTP_USER, SMTP_PASSWORD]):
+    # 1. Brevo HTTP API (sends to any email, free 300/day)
+    if BREVO_API_KEY:
         try:
-            await asyncio.to_thread(_send_smtp, to_email, html_body, text_body)
+            await _send_brevo(to_email, html_body)
             return
-        except Exception as smtp_err:
-            print(f"[EMAIL] SMTP failed completely: {smtp_err}", flush=True)
-            # Fall through to Resend
-            if not RESEND_API_KEY:
-                raise HTTPException(status_code=502, detail=f"Failed to send email via SMTP: {smtp_err}")
+        except Exception as e:
+            errors.append(f"Brevo: {e}")
 
-    # Fallback to Resend HTTP API
+    # 2. Resend HTTP API
     if RESEND_API_KEY:
         try:
             await _send_resend(to_email, html_body)
             return
-        except HTTPException:
-            raise
-        except Exception as exc:
-            print(f"[EMAIL] Resend failed: {exc}", flush=True)
-            raise HTTPException(status_code=502, detail=f"Failed to send email: {exc}")
+        except Exception as e:
+            errors.append(f"Resend: {e}")
 
-    raise HTTPException(status_code=500, detail="No email provider configured.")
+    # 3. SMTP fallback (works locally, blocked on Render)
+    if all([SMTP_HOST, SMTP_USER, SMTP_PASSWORD]):
+        try:
+            await asyncio.to_thread(_send_smtp, to_email, html_body, text_body)
+            return
+        except Exception as e:
+            errors.append(f"SMTP: {e}")
+
+    detail = "; ".join(errors) if errors else "No email provider configured."
+    print(f"[EMAIL] All providers failed: {detail}", flush=True)
+    raise HTTPException(status_code=502, detail=f"Failed to send email. {detail}")
