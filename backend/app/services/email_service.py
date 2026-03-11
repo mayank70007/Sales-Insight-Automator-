@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from app.config import (
     BREVO_API_KEY,
     RESEND_API_KEY,
+    SENDGRID_API_KEY,
     SMTP_FROM_EMAIL,
     SMTP_HOST,
     SMTP_PASSWORD,
@@ -153,6 +154,33 @@ def _send_smtp(to_email: str, html_body: str, text_body: str) -> None:
         server.sendmail(SMTP_FROM_EMAIL, to_email, msg.as_string())
 
 
+async def _send_sendgrid(to_email: str, html_body: str, text_body: str) -> None:
+    """Send email via SendGrid HTTP API — free 100/day, any recipient."""
+    print("[EMAIL] Using SendGrid HTTP API...", flush=True)
+    from_email = SMTP_FROM_EMAIL or "singalmayank0000@gmail.com"
+    async with httpx.AsyncClient(timeout=20) as client:
+        response = await client.post(
+            "https://api.sendgrid.com/v3/mail/send",
+            headers={
+                "Authorization": f"Bearer {SENDGRID_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "personalizations": [{"to": [{"email": to_email}]}],
+                "from": {"email": from_email, "name": "Sales Insight Automator"},
+                "subject": "Sales Insight Report - Executive Summary",
+                "content": [
+                    {"type": "text/plain", "value": text_body},
+                    {"type": "text/html", "value": html_body},
+                ],
+            },
+        )
+    if response.status_code not in (200, 201, 202):
+        print(f"[EMAIL] SendGrid error {response.status_code}: {response.text}", flush=True)
+        raise HTTPException(status_code=502, detail=f"SendGrid API error ({response.status_code}): {response.text}")
+    print("[EMAIL] SendGrid sent successfully.", flush=True)
+
+
 async def _send_brevo(to_email: str, html_body: str) -> None:
     """Send email via Brevo (Sendinblue) HTTP API — free 300/day, any recipient."""
     print("[EMAIL] Using Brevo HTTP API...", flush=True)
@@ -200,12 +228,20 @@ async def _send_resend(to_email: str, html_body: str) -> None:
 
 
 async def send_email(to_email: str, summary: str) -> None:
-    """Send email: Brevo first, then Resend, then SMTP fallback."""
+    """Send email: SendGrid first, then Brevo, Resend, SMTP fallback."""
     html_body = _build_html(summary)
     text_body = _build_plain_text(summary)
     errors = []
 
-    # 1. Brevo HTTP API (sends to any email, free 300/day)
+    # 1. SendGrid HTTP API (free 100/day, any recipient)
+    if SENDGRID_API_KEY:
+        try:
+            await _send_sendgrid(to_email, html_body, text_body)
+            return
+        except Exception as e:
+            errors.append(f"SendGrid: {e}")
+
+    # 2. Brevo HTTP API (sends to any email, free 300/day)
     if BREVO_API_KEY:
         try:
             await _send_brevo(to_email, html_body)
@@ -213,7 +249,7 @@ async def send_email(to_email: str, summary: str) -> None:
         except Exception as e:
             errors.append(f"Brevo: {e}")
 
-    # 2. Resend HTTP API
+    # 3. Resend HTTP API
     if RESEND_API_KEY:
         try:
             await _send_resend(to_email, html_body)
@@ -221,7 +257,7 @@ async def send_email(to_email: str, summary: str) -> None:
         except Exception as e:
             errors.append(f"Resend: {e}")
 
-    # 3. SMTP fallback (works locally, blocked on Render)
+    # 4. SMTP fallback (works locally, blocked on Render)
     if all([SMTP_HOST, SMTP_USER, SMTP_PASSWORD]):
         try:
             await asyncio.to_thread(_send_smtp, to_email, html_body, text_body)
