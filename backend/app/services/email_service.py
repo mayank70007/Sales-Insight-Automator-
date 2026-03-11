@@ -4,9 +4,17 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
+import httpx
 from fastapi import HTTPException
 
-from app.config import SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM_EMAIL
+from app.config import (
+    RESEND_API_KEY,
+    SMTP_FROM_EMAIL,
+    SMTP_HOST,
+    SMTP_PASSWORD,
+    SMTP_PORT,
+    SMTP_USER,
+)
 
 
 def _build_html(summary: str) -> str:
@@ -131,19 +139,45 @@ def _send_smtp(to_email: str, html_body: str, text_body: str) -> None:
     msg.attach(MIMEText(text_body, "plain"))
     msg.attach(MIMEText(html_body, "html"))
 
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as server:
         server.starttls()
         server.login(SMTP_USER, SMTP_PASSWORD)
         server.sendmail(SMTP_FROM_EMAIL, to_email, msg.as_string())
 
 
+async def _send_resend(to_email: str, html_body: str) -> None:
+    """Send email via Resend HTTP API (works on Render free tier)."""
+    print("[EMAIL] Using Resend HTTP API...", flush=True)
+    async with httpx.AsyncClient(timeout=15) as client:
+        response = await client.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {RESEND_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "from": "Sales Insight <onboarding@resend.dev>",
+                "to": [to_email],
+                "subject": "Sales Insight Report - Executive Summary",
+                "html": html_body,
+            },
+        )
+    if response.status_code not in (200, 201):
+        print(f"[EMAIL] Resend error {response.status_code}: {response.text}", flush=True)
+        raise HTTPException(status_code=502, detail=f"Resend API error ({response.status_code}): {response.text}")
+    print("[EMAIL] Resend sent successfully.", flush=True)
+
+
 async def send_email(to_email: str, summary: str) -> None:
-    """Send the executive summary to the specified email via SMTP."""
+    """Send the executive summary via Resend (if configured) or SMTP fallback."""
     html_body = _build_html(summary)
     text_body = _build_plain_text(summary)
 
     try:
-        await asyncio.to_thread(_send_smtp, to_email, html_body, text_body)
+        if RESEND_API_KEY:
+            await _send_resend(to_email, html_body)
+        else:
+            await asyncio.to_thread(_send_smtp, to_email, html_body, text_body)
     except HTTPException:
         raise
     except Exception as exc:

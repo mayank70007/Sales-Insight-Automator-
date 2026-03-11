@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+RESEND_API_KEY: str = os.getenv("RESEND_API_KEY", "")
 SMTP_HOST: str = os.getenv("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT: int = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER: str = os.getenv("SMTP_USER", "")

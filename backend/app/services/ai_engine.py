@@ -5,7 +5,7 @@ from app.config import GROQ_API_KEY
 from app.services.data_processor import SalesMetrics
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-MODEL = "llama-3.3-70b-versatile"
+MODEL = "llama-3.1-8b-instant"
 
 
 def _build_prompt(metrics: SalesMetrics) -> str:
@@ -33,7 +33,7 @@ async def generate_summary(metrics: SalesMetrics) -> str:
 
     prompt = _build_prompt(metrics)
 
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=25) as client:
         response = await client.post(
             GROQ_URL,
             headers={
@@ -44,7 +44,7 @@ async def generate_summary(metrics: SalesMetrics) -> str:
                 "model": MODEL,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.5,
-                "max_tokens": 1024,
+                "max_tokens": 512,
             },
         )
 
