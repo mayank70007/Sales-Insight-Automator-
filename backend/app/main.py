@@ -56,3 +56,46 @@ async def config_check():
         "SMTP_FROM_EMAIL": bool(SMTP_FROM_EMAIL),
         "ALLOWED_ORIGINS": ALLOWED_ORIGINS,
     }
+
+
+@app.get("/test-groq", tags=["System"], summary="Test Groq API connection")
+async def test_groq():
+    """Quick test of Groq API connectivity."""
+    import httpx
+    from app.config import GROQ_API_KEY
+    print("[TEST-GROQ] Starting...", flush=True)
+    if not GROQ_API_KEY:
+        return {"ok": False, "error": "GROQ_API_KEY is empty"}
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+                json={"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": "Say hello"}], "max_tokens": 10},
+            )
+        print(f"[TEST-GROQ] Status: {r.status_code}", flush=True)
+        if r.status_code == 200:
+            return {"ok": True, "response": r.json()["choices"][0]["message"]["content"]}
+        return {"ok": False, "status": r.status_code, "body": r.text[:500]}
+    except Exception as e:
+        print(f"[TEST-GROQ] Error: {e}", flush=True)
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/test-smtp", tags=["System"], summary="Test SMTP connection")
+async def test_smtp():
+    """Quick test of SMTP connectivity."""
+    import smtplib
+    from app.config import SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD
+    print("[TEST-SMTP] Starting...", flush=True)
+    if not all([SMTP_HOST, SMTP_USER, SMTP_PASSWORD]):
+        return {"ok": False, "error": "SMTP config missing"}
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+        print("[TEST-SMTP] Login OK", flush=True)
+        return {"ok": True, "message": "SMTP login successful"}
+    except Exception as e:
+        print(f"[TEST-SMTP] Error: {e}", flush=True)
+        return {"ok": False, "error": str(e)}
